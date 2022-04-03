@@ -1,6 +1,7 @@
 import asyncio
 import csv
 import difflib
+import random
 import discord
 from discord.ext import commands
 from io import BytesIO
@@ -17,7 +18,7 @@ client.df = pd.read_csv("country_data.csv")
 client.df.rename(columns={"CountryName": "country", "CapitalName": "capital", "CapitalLatitude": "lat",
                           "CapitalLongitude": "lon", "CountryCode": "code", "ContinentName": "continent"},
                  inplace=True)
-client.df.sample(3)
+# client.df.sample(3)
 
 
 def cancel_task(done, pending):
@@ -29,7 +30,9 @@ def cancel_task(done, pending):
 
 @client.command()
 async def play(ctx):
-    r = requests.get("https://gadm.org/maps/MOZ.html")
+    rand_choice = client.df.sample(1).reset_index()
+    country = rand_choice.loc[0, "country"]
+    r = requests.get(f"https://gadm.org/maps/{rand_choice.loc[0, 'code']}.html")
     soup = BeautifulSoup(r.content, "lxml")
 
     suffix = soup.find("ul", {"id": "thumb_img"}).findAll("img")[-1]["src"][2:]
@@ -56,11 +59,13 @@ async def play(ctx):
 
     embed = discord.Embed(title="Guess the Country", color=discord.Color.blue())
     embed.set_image(url="attachment://picture.png")
+    embed.set_footer(text=random.choice(["Country distance is calculated via distance between capitals",
+                                         discord.Embed.Empty, discord.Embed.Empty, discord.Embed.Empty,
+                                         discord.Embed.Empty]))
 
     view = GiveUp(ctx)
-    await ctx.send(embed=embed, file=file, view=view)
-
-    country = "Mozambique"
+    last_msg = await ctx.reply(embed=embed, file=file, view=view)
+    view.message = last_msg
 
     def check(m):
         return ctx.author == m.author and ctx.channel == m.channel
@@ -76,15 +81,33 @@ async def play(ctx):
             msg = done.pop().result()
         except KeyError:
             cancel_task(done, pending)
-            return await ctx.send("You ran out of time! So, you lost.")
+            return await ctx.reply(f"You ran out of time! So, you lost. The country was ||{country}||.")
         except BaseException:
             return
         for future in done:
             future.exception()
 
         if type(msg) == bool:
-            cancel_task(done, pending)
-            return
+            c_view = Confirm(ctx)
+            msg = await ctx.reply(embed=discord.Embed(description="Are you sure you want to give up?", color=discord.Color.blue()),
+                            view=c_view)
+            c_view.message = msg
+            timed_out = await c_view.wait()
+            if timed_out:
+                await msg.reply("You didn't respond in time, so the game will continue.", delete_after=5)
+                view = GiveUp(ctx)
+                view.message = last_msg
+                continue
+            else:
+                if c_view.choice:
+                    await msg.reply(f"You've given up! The country was ||{country}||.")
+                    cancel_task(done, pending)
+                    return
+                else:
+                    await msg.reply("Cancelled. Choose a country and keep playing!", delete_after=5)
+                    view = GiveUp(ctx)
+                    view.message = last_msg
+                    continue
 
         with open('country_data.csv') as csvfile:
             rows = csv.reader(csvfile)
@@ -95,12 +118,13 @@ async def play(ctx):
         if msg.content.lower() not in country_names2:
             best_matches = difflib.get_close_matches(msg.content.lower(), country_names2, 3, 0.75)
             for country_name in country_names2:
-                if any(x in country_name.split() for x in msg.content.lower().split()) or \
-                        any(x in msg.content.lower().split() for x in country_name.split()):
+                if (any(x in country_name.split() for x in msg.content.lower().split())
+                    or any(x in msg.content.lower().split() for x in country_name.split())) \
+                        and country_name not in best_matches:
                     best_matches.append(country_name)
 
             if len(best_matches) == 0:
-                await ctx.send("Not a valid country. Choose a different country.")
+                await ctx.reply("Not a valid country. Choose a different country.", delete_after=5)
                 continue
             elif len(best_matches) == 1:
                 c_view = Confirm(ctx)
@@ -117,7 +141,7 @@ async def play(ctx):
                 timed_out = await c_view.wait()
 
             if timed_out:
-                await ctx.send("You ran out of time. Choose a different country.")
+                await ctx.reply("You ran out of time. Choose a different country.", delete_after=5)
                 continue
             else:
                 if len(best_matches) > 1:
@@ -126,17 +150,16 @@ async def play(ctx):
                     if c_view.choice:
                         guess = country_names[country_names2.index(best_matches[0])]
                     else:
-                        await ctx.send("Cancelled. Choose a different country.")
+                        await ctx.reply("Cancelled. Choose a different country.", delete_after=5)
                         continue
 
         else:
             guess = country_names[country_names2.index(msg.content.lower())]
 
-        dis = client.df[client.df["country"].isin([country, guess])].reset_index()
+        if guess == country:
+            return await ctx.reply("You win!")
 
-        if len(dis) == 1:
-            await ctx.send("Not a valid country!")
-            continue
+        dis = client.df[client.df["country"].isin([country, guess])].reset_index()
 
         d = distance.distance((dis.loc[0, "lat"], dis.loc[0, "lon"]), (dis.loc[1, "lat"], dis.loc[1, "lon"]))
 
@@ -174,8 +197,13 @@ async def play(ctx):
         file = discord.File(buffer, filename="picture.png")
         embed.set_image(url="attachment://picture.png")
 
+        embed.set_footer(text=random.choice(["Country distance is calculated via distance between capitals",
+                                             discord.Embed.Empty, discord.Embed.Empty, discord.Embed.Empty, discord.Embed.Empty]))
         guesses += 1
-        await ctx.send(embed=embed, file=file, view=view)
+        await last_msg.delete()
+        last_msg = await ctx.reply(embed=embed, file=file, view=view)
+
+    await ctx.reply(f"You ran out of guesses! The answer was ||{country}||.")
 
 
-client.run("TOKEN")
+client.run("OTUzMTQ2MDk2OTQxNjgyNzk4.YjAUeg.wEMgRB6ux361vogtm2p404h99LY")
