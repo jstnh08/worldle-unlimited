@@ -1,4 +1,4 @@
 # worldle-unlimited
-Worldle but unlimited
+Worldle
 
 i didnt make the csv file btw i just stole it
